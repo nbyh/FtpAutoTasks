@@ -1,0 +1,17 @@
+# 定义常量
+FTP_TASK_STATUS_ENABLED = "enabled"
+FTP_TASK_STATUS_DISABLED = "disabled"
+FTP_TASK_STATUS_RUNNING = "running"
+FTP_TASK_STATUS_FAILED = "failed"
+
+DEFAULT_RETRY_INTERVAL = 5  # 发送失败重试等待间隔（秒）
+DEFAULT_RETRY_COUNT = 3      # 默认重试次数
+
+LOG_DIRECTORY = "logs"        # 日志目录
+LOG_SUBDIRECTORY_FORMAT = "%Y%m"  # 日志子目录格式
+
+# UI 相关常量
+UI_TASK_LIST_COLOR_ENABLED = "green"
+UI_TASK_LIST_COLOR_DISABLED = "gray"
+UI_TASK_LIST_COLOR_RUNNING = "blue"
+UI_TASK_LIST_COLOR_FAILED = "red"

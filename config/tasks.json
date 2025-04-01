@@ -1,0 +1,38 @@
+{
+  "tasks": [
+    {
+      "name": "test1",
+      "enabled": true,
+      "ftp_address": "10.1.1.1",
+      "username": "2",
+      "password": "gAAAAABn7AOpre-4MtXs_KXwAlm7NhYuQ4vOUhTkmEX2mf2JeOpr2lRsi9ldMxRL6OWdVBjKqbrJlqSs5jyG1Ho3YMguO0I9VA==",
+      "remote_dir": "\\",
+      "local_dir": "F:/Code/Local/Python/FtpAutoTasks/logs",
+      "file_types": [
+        "*"
+      ],
+      "send_mode": "immediate",
+      "schedule_interval": null,
+      "delay_after_generation": 1,
+      "retry_count": 2,
+      "retry_interval": 3
+    },
+    {
+      "name": "test2",
+      "enabled": true,
+      "ftp_address": "20.0.0.0",
+      "username": "3",
+      "password": "gAAAAABn7AOp0AxZEhyHhKmWoNQkJTsRXPEdedouORWpAEz7HK7BPiGH1G2qUAsVVa89i-3wHZ9P70EchS7OOc-jV4yZowsUVg==",
+      "remote_dir": "\\",
+      "local_dir": "F:/Code/Local/Python/FtpAutoTasks",
+      "file_types": [
+        "*.bin"
+      ],
+      "send_mode": "scheduled",
+      "schedule_interval": 1,
+      "delay_after_generation": null,
+      "retry_count": 2,
+      "retry_interval": 3
+    }
+  ]
+}

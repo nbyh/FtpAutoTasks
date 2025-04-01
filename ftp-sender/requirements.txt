@@ -1,0 +1,17 @@
+# GUI框架
+PyQt5>=5.15.0
+
+# 文件监控
+watchdog>=2.1.0
+
+# 加密功能
+cryptography>=35.0.0
+
+# Windows系统支持
+pywin32>=228
+
+# FTP功能
+ftplib # Python标准库
+
+# 日期时间处理
+python-dateutil>=2.8.0
