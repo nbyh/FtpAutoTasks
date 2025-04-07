@@ -1,3 +1,4 @@
 /autoftp/
 /config/
 /logs/
+/ftp-sender/**/__pycache__/*.pyc
