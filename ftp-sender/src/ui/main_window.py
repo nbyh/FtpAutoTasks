@@ -86,9 +86,10 @@ class MainWindow(QMainWindow):
         self.start_button = QPushButton("全部开始")
         self.stop_button = QPushButton("全部停止")
         self.config_button = QPushButton("任务配置")
+        self.log_button = QPushButton("日志查询")  # 新增日志查询按钮
         self.exit_button = QPushButton("退出程序")
         
-        for btn in [self.start_button, self.stop_button, self.config_button, self.exit_button]:
+        for btn in [self.start_button, self.stop_button, self.config_button, self.log_button, self.exit_button]:  # 修改按钮列表
             btn.setStyleSheet(button_style)
             button_layout.addWidget(btn)
         
@@ -118,12 +119,18 @@ class MainWindow(QMainWindow):
         
         # 连接信号
         self.setup_connections()
+        
+        # 添加进度更新定时器
+        self.progress_timer = QTimer()
+        self.progress_timer.timeout.connect(self.update_status)
+        self.progress_timer.start(100)  # 每100ms更新一次进度
 
     def setup_connections(self):
         """设置信号连接"""
         self.start_button.clicked.connect(self.start_tasks)
         self.stop_button.clicked.connect(self.stop_tasks)
         self.config_button.clicked.connect(self.open_config_dialog)
+        self.log_button.clicked.connect(self.open_log_dialog)  # 新增日志查询按钮信号连接
         self.exit_button.clicked.connect(self.handle_exit)
 
     def setupTimer(self):
@@ -187,6 +194,8 @@ class MainWindow(QMainWindow):
                 
                 task = FTPTask(**task_data)
                 self.tasks.append(task)
+                # 将任务添加到任务管理器
+                self.task_manager.add_task(task)
 
             self.updateTaskList()
         except Exception as e:
@@ -226,26 +235,30 @@ class MainWindow(QMainWindow):
     def update_status(self):
         """更新进度显示"""
         try:
-            # 更新传输进度
             while not self.task_manager.progress_queue.empty():
-                progress_data = self.task_manager.progress_queue.get_nowait()
-                task_name = progress_data['task_name']
-                progress = progress_data['progress']
-                
-                # 更新进度条
-                self.progress_bar.setValue(progress['percentage'])
-                self.progress_bar.setFormat(
-                    f"{task_name}: {progress['filename']} - {progress['percentage']}%"
-                )
-                
-                # 当传输完成时清空进度条
-                if progress['percentage'] == 100:
-                    QTimer.singleShot(2000, self.reset_progress_bar)
+                try:
+                    data = self.task_manager.progress_queue.get_nowait()
+                    if data.get('type') == 'progress':
+                        # 只更新进度条，不显示文字
+                        progress = data.get('progress', {})
+                        percentage = progress.get('percentage', 0)
+                        self.progress_bar.setValue(percentage)
+                        self.progress_bar.setFormat("")  # 清除进度条文字
+                        
+                        # 传输完成时重置进度条
+                        if percentage >= 100:
+                            QTimer.singleShot(2000, self.reset_progress_bar)
+                            
+                    elif data.get('type') == 'message':
+                        # 显示传输过程消息
+                        self.add_send_log(data.get('message', ''))
+                        
+                except queue.Empty:
+                    break
                     
-        except queue.Empty:
-            pass
         except Exception as e:
             print(f"更新进度显示时出错: {str(e)}")
+            system_logger.error(f"更新进度显示时出错: {str(e)}", exc_info=True)
 
     def reset_progress_bar(self):
         """重置进度条"""
@@ -356,14 +369,31 @@ class MainWindow(QMainWindow):
 
     def add_send_log(self, message: str):
         """添加发送日志到界面"""
-        current_time = datetime.now().strftime("%yy-%m-%d %H:%M:%S")
-        self.send_log.append(f"[{current_time}] {message}")
-        # 限制显示最新的1000条记录
-        if self.send_log.document().lineCount() > 1000:
-            cursor = self.send_log.textCursor()
-            cursor.movePosition(cursor.Start)
-            cursor.movePosition(cursor.Down, cursor.KeepAnchor)
-            cursor.removeSelectedText()
+        try:
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_text = f"[{current_time}] {message}"
+            
+            # 添加新日志
+            self.send_log.append(log_text)
+            
+            # 滚动到底部
+            scroll_bar = self.send_log.verticalScrollBar()
+            scroll_bar.setValue(scroll_bar.maximum())
+            
+            # 限制显示最新的1000条记录
+            doc = self.send_log.document()
+            if doc.lineCount() > 1000:
+                cursor = self.send_log.textCursor()
+                cursor.movePosition(cursor.Start)
+                cursor.movePosition(cursor.Down, cursor.KeepAnchor)
+                cursor.removeSelectedText()
+                
+            # 立即刷新显示
+            QApplication.processEvents()
+            
+        except Exception as e:
+            print(f"添加日志时出错: {str(e)}")
+            system_logger.error(f"添加日志时出错: {str(e)}", exc_info=True)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

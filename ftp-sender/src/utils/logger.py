@@ -34,6 +34,18 @@ class Logger:
         }
         self._write_log(task_name, log_entry)
 
+    def log_info(self, task_name: str, operation: str, message: str):
+        """记录信息日志"""
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = {
+            "time": current_time,
+            "operation": operation,
+            "message": message,
+            "status": "info"
+        }
+        print(f"[INFO] [{current_time}] [{task_name}] [{operation}] {message}")  # 控制台输出
+        self._write_log(task_name, log_entry)
+
     def _write_log(self, task_name: str, log_entry: dict):
         """写入日志文件"""
         log_file = os.path.join(self.log_dir, f"{task_name}.log")

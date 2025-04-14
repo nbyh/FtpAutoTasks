@@ -1,3 +1,4 @@
+import fnmatch
 import os
 import time
 import json
@@ -44,25 +45,46 @@ class FTPTaskManager:
     def start_task(self, task_name):
         """启动任务"""
         task = self.tasks.get(task_name)
-        if not task or not task.enabled:
-            return
+        if not task:
+            self.logger.log_error(task_name, "start_task", "任务不存在")
+            return False
             
-        if task.send_mode == "scheduled":
-            # 定时发送模式
-            timer = threading.Timer(task.schedule_interval * 60, 
-                                 self._scheduled_send, 
-                                 args=(task_name,))
-            timer.daemon = True
-            timer.start()
-            self.timers[task_name] = timer
-        else:
-            # 即时发送模式
-            observer = Observer()
-            event_handler = FileChangeHandler(self, task)
-            observer.schedule(event_handler, task.local_dir, recursive=False)
-            observer.start()
-            self.observers[task_name] = observer
+        if not task.enabled:
+            self.logger.log_error(task_name, "start_task", "任务未启用")
+            return False
             
+        try:
+            if task.send_mode == "scheduled":
+                # 定时发送模式
+                if task_name in self.timers:
+                    self.timers[task_name].cancel()
+                    
+                timer = threading.Timer(task.schedule_interval * 60, 
+                                     self._scheduled_send, 
+                                     args=(task_name,))
+                timer.daemon = True
+                timer.start()
+                self.timers[task_name] = timer
+                
+            else:
+                # 即时发送模式
+                if task_name in self.observers:
+                    self.observers[task_name].stop()
+                    self.observers[task_name].join()
+                    
+                observer = Observer()
+                event_handler = FileChangeHandler(self, task)
+                observer.schedule(event_handler, task.local_dir, recursive=False)
+                observer.start()
+                self.observers[task_name] = observer
+                
+            self.update_task_status(task_name, TaskStatus.RUNNING)
+            return True
+            
+        except Exception as e:
+            self.logger.log_error(task_name, "start_task", f"启动任务失败: {str(e)}")
+            return False
+
     def stop_task(self, task_name):
         """停止任务"""
         if task_name in self.observers:
@@ -157,93 +179,176 @@ class FTPTaskManager:
         """定时发送处理"""
         task = self.tasks.get(task_name)
         if not task:
+            self.logger.log_error(task_name, "scheduled_send", "任务不存在")
             return
+        
+        try:
+            self.logger.log_info(task_name, "scheduled_send", f"开始执行定时任务,检查目录: {task.local_dir}")
             
-        # 扫描目录下的文件
-        for filename in os.listdir(task.local_dir):
-            if any(filename.endswith(ext) for ext in task.file_types):
-                self._send_file(task, filename)
+            # 检查目录是否存在
+            if not os.path.exists(task.local_dir):
+                self.logger.log_error(task_name, "scheduled_send", f"目录不存在: {task.local_dir}")
+                return
+            
+            # 扫描目录下的文件
+            files_to_send = []
+            for filename in os.listdir(task.local_dir):                
+                if any(fnmatch.fnmatch(filename, ext) for ext in task.file_types):
+                    files_to_send.append(filename)
+            
+            self.logger.log_info(task_name, "scheduled_send", f"找到 {len(files_to_send)} 个匹配的文件")
                 
-        # 重新启动定时器
-        self.start_task(task_name)
+            if not files_to_send:
+                self.logger.log_info(task_name, "scheduled_send", "没有找到需要发送的文件")
+            else:
+                for filename in files_to_send:
+                    self.logger.log_info(task_name, "scheduled_send", f"正在处理文件: {filename}")
+                    success = self._send_file(task, filename)
+                    if success:
+                        self.logger.log_info(task_name, "scheduled_send", f"文件 {filename} 发送成功")
+                    else:
+                        self.logger.log_error(task_name, "scheduled_send", f"文件 {filename} 发送失败")
+                
+        except Exception as e:
+            self.logger.log_error(task_name, "scheduled_send", f"扫描目录失败: {str(e)}")
+        finally:
+            # 重新启动定时器
+            if task.enabled:
+                self.logger.log_info(task_name, "scheduled_send", f"重新设置定时器,间隔: {task.schedule_interval}分钟")
+                self.start_task(task_name)
         
     def _send_file(self, task: FTPTask, filename: str):
-        """发送文件，添加进度显示"""
         try:
             local_path = os.path.join(task.local_dir, filename)
+            self.logger.log_info(task.name, "send_file", f"准备发送文件: {local_path}")
+            message = f"{task.name}：准备发送文件: {filename}"
+            self.progress_queue.put({'type': 'message', 'message': message})
+        
             total_size = os.path.getsize(local_path)
+            self.logger.log_info(task.name, "send_file", f"文件大小: {total_size} 字节")
+            message = f"{task.name}：文件大小: {total_size} 字节"
+            self.progress_queue.put({'type': 'message', 'message': message})
+                    
             self.transfer_progress[task.name] = {
                 'filename': filename,
                 'total_size': total_size,
                 'transferred': 0,
                 'percentage': 0
             }
-
-            def progress_callback(transferred):
-                self.transfer_progress[task.name].update({
-                    'transferred': transferred,
-                    'percentage': int((transferred / total_size) * 100)
-                })
-                self.progress_queue.put({
-                    'task_name': task.name,
-                    'progress': self.transfer_progress[task.name]
-                })
-
+            
+            def progress_callback(transferred_bytes):
+                try:
+                    transferred = len(transferred_bytes) if isinstance(transferred_bytes, bytes) else transferred_bytes
+                    percentage = int((transferred / total_size) * 100) if total_size > 0 else 0
+                    
+                    # 仅更新进度数据，不记录日志
+                    
+                    # 只更新进度数据
+                    self.transfer_progress[task.name] = {
+                        'filename': filename,
+                        'total_size': total_size,
+                        'transferred': transferred,
+                        'percentage': percentage
+                    }
+                    
+                    # 发送进度更新到界面
+                    self.progress_queue.put({
+                        'type': 'progress',
+                        'progress': self.transfer_progress[task.name].copy()
+                    })
+                    
+                except Exception as e:
+                    self.logger.log_error(task.name, "progress_callback", f"更新进度失败: {str(e)}")
+        
             retries = 0
-            
-            # 检查文件是否存在
-            if not os.path.exists(local_path):
-                self.update_task_status(task.name, 'error', f"文件不存在: {filename}")
-                return False
-            
             while retries < task.retry_count:
                 try:
                     # 检查文件是否被占用
                     if self._is_file_locked(local_path):
+                        self.logger.log_info(task.name, "send_file", f"文件被占用,等待解锁: {filename}")                        
+                        message = f"{task.name}：文件被占用,等待解锁: {filename}"
+                        self.progress_queue.put({'type': 'message', 'message': message})
                         time.sleep(1)
                         continue
                     
                     # 检查文件大小是否为0
                     if os.path.getsize(local_path) == 0:
+                        message = f"{task.name}：文件大小为0，可能未完成写入: {filename}"
+                        self.progress_queue.put({'type': 'message', 'message': message})
                         raise Exception("文件大小为0，可能未完成写入")
                         
                     # 连接FTP
+                    self.logger.log_info(task.name, "send_file", f"正在连接FTP服务器: {task.ftp_address}")
+                    message = f"{task.name}：正在连接FTP服务器: {task.ftp_address}"
+                    self.progress_queue.put({'type': 'message', 'message': message})
+                    
                     with ftplib.FTP(task.ftp_address) as ftp:
                         try:
                             ftp.login(task.username, task.password)
+                            self.logger.log_info(task.name, "send_file", "FTP登录成功")
+                            message = f"{task.name}：FTP登录成功"
+                            self.progress_queue.put({'type': 'message', 'message': message})
                         except ftplib.error_perm as e:
+                            message = f"{task.name}：FTP登录失败: {str(e)}"
+                            self.progress_queue.put({'type': 'message', 'message': message})
                             raise Exception(f"FTP登录失败: {str(e)}")
                             
                         try:
-                            ftp.cwd(task.remote_dir)
+                            if task.remote_dir and task.remote_dir != "\\":
+                                # 分割路径并逐级创建/切换目录
+                                dirs = [d for d in task.remote_dir.strip('\\').split('\\') if d]
+                                for dir in dirs:
+                                    try:
+                                        ftp.cwd(dir)
+                                    except ftplib.error_perm:
+                                        # 目录不存在时尝试创建
+                                        try:
+                                            ftp.mkd(dir)
+                                            ftp.cwd(dir)
+                                        except ftplib.error_perm as e:
+                                            message = f"{task.name}：无法创建或切换到远程目录: {str(e)}"
+                                            self.progress_queue.put({'type': 'message', 'message': message})
+                                            raise Exception(f"无法创建或切换到远程目录 {dir}: {str(e)}")
+                            self.logger.log_info(task.name, "send_file", f"已切换到远程目录: {task.remote_dir}")
+                            message = f"{task.name}：已切换到远程目录: {task.remote_dir}"
+                            self.progress_queue.put({'type': 'message', 'message': message})
                         except ftplib.error_perm as e:
                             raise Exception(f"切换远程目录失败: {str(e)}")
                         
                         # 上传文件
+                        self.logger.log_info(task.name, "send_file", f"开始上传文件: {filename}")
+                        message = f"{task.name}：开始上传文件: {filename}"
+                        self.progress_queue.put({'type': 'message', 'message': message})
                         with open(local_path, 'rb') as f:
                             ftp.storbinary(f'STOR {filename}', f, callback=progress_callback)
                             
-                    # 记录成功状态
-                    self.update_task_status(task.name, 'success')
-                    self.last_send_times[task.name] = datetime.now()
                     self.logger.log_success(task.name, filename, retries)
+                    message = f"{task.name}： {filename}文件发送成功"
+                    self.progress_queue.put({'type': 'message', 'message': message})
+                    self.last_send_times[task.name] = datetime.now()
                     self.transfer_progress.pop(task.name, None)
                     return True
                     
                 except Exception as e:
                     retries += 1
                     error_msg = f"发送失败 (第{retries}次尝试): {str(e)}"
-                    self.update_task_status(task.name, 'error', error_msg)
                     self.logger.log_error(task.name, filename, error_msg)
+                    self.progress_queue.put({'type': 'message', 'message': error_msg})
+                    self.update_task_status(task.name, 'error', error_msg)
                     
                     if retries < task.retry_count:
+                        self.logger.log_info(task.name, "send_file", f"等待 {task.retry_interval} 秒后重试")
+                        message = f"{task.name}：等待 {task.retry_interval} 秒后重试"
+                        self.progress_queue.put({'type': 'message', 'message': message})
                         time.sleep(task.retry_interval)
                         
             return False
             
         except Exception as e:
-            self.logger.log_error(task.name, filename, str(e))
-            raise
+            self.logger.log_error(task.name, filename, f"发送失败: {str(e)}")
+            message = f"{task.name}：{filename}发送失败: {str(e)}"
+            self.progress_queue.put({'type': 'message', 'message': message})
+            return False
 
     def _is_file_locked(self, filepath):
         """检查文件是否被占用"""
@@ -291,15 +396,25 @@ class FTPTaskManager:
         if task_name not in self.task_statuses:
             self.task_statuses[task_name] = {}
         
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
         self.task_statuses[task_name].update({
             'status': status,
-            'last_update': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            'last_update': current_time
         })
         
         if error:
-            self.task_statuses[task_name]['last_error'] = str(error)
+            self.task_statuses[task_name].update({
+                'last_error': str(error),
+                'last_error_time': current_time
+            })
         elif status == 'success':
-            self.task_statuses[task_name]['last_success'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.task_statuses[task_name].update({
+                'last_success': current_time,
+                'success_count': self.task_statuses[task_name].get('success_count', 0) + 1
+            })
+        
+        self.logger.log_info(task_name, "status", f"任务状态更新为: {status}")
 
     def get_recent_send_count(self) -> int:
         """获取过去1小时的发送文件总数"""
@@ -427,7 +542,7 @@ class FTPTaskManager:
 
 class FileChangeHandler(FileSystemEventHandler):
     def __init__(self, manager, task):
-        self.manager = manager
+        self.manager = manager  # FTPTaskManager 实例
         self.task = task
         
     def on_created(self, event):
@@ -435,8 +550,17 @@ class FileChangeHandler(FileSystemEventHandler):
             return
             
         filename = os.path.basename(event.src_path)
-        if any(filename.endswith(ext) for ext in self.task.file_types):
+        if any(fnmatch.fnmatch(filename, ext) for ext in self.task.file_types):
             # 延迟发送
             if self.task.delay_after_generation:
                 time.sleep(self.task.delay_after_generation)
-            self.manager._send_file(self.task, filename)
+                
+            try:
+                # 调用 manager 的 _send_file 方法
+                success = self.manager._send_file(self.task, filename)
+                if success:
+                    self.manager.logger.log_info(self.task.name, "file_handler", f"文件 {filename} 发送成功")
+                else:
+                    self.manager.logger.log_error(self.task.name, "file_handler", f"文件 {filename} 发送失败")
+            except Exception as e:
+                self.manager.logger.log_error(self.task.name, "file_handler", f"发送文件时出错: {str(e)}")
